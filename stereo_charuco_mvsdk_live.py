@@ -314,6 +314,21 @@ class Cam:
 def draw_info(img, text, org=(10,30)):
     cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255) if img.ndim==3 else (200,), 2, cv2.LINE_AA)
 
+# 미리보기용 축소 함수: 원본 크기는 유지하고, 화면에만 축소해 표시
+# scale과 max_width를 동시에 주면 둘 중 더 작은 배율을 사용
+# 반환: (축소이미지, 사용된 배율)
+def make_display(img, scale=None, max_width=None):
+    h, w = img.shape[:2]
+    s = 1.0
+    if max_width and max_width > 0:
+        s = min(s, max_width / float(w))
+    if scale and 0 < scale < 1.0:
+        s = min(s, float(scale))
+    if s < 1.0:
+        new_size = (max(1, int(w*s)), max(1, int(h*s)))
+        return cv2.resize(img, new_size, interpolation=cv2.INTER_AREA), s
+    return img, 1.0
+
 
 def main():
     ap = argparse.ArgumentParser(description="MVSDK 2-Cam Live ChArUco Stereo Calibration")
@@ -327,6 +342,8 @@ def main():
     ap.add_argument("--exposure-us", type=int, default=30000, help="노출 시간(마이크로초)")
     ap.add_argument("--out", default="out_live")
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--disp-scale", type=float, default=0.33, help="미리보기 축소 배율(0~1). 1.0=원본")
+    ap.add_argument("--disp-max-width", type=int, default=1280, help="미리보기 가로 최대 픽셀. 0=무제한")
     args = ap.parse_args()
 
     outdir = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -418,8 +435,12 @@ def main():
             draw_info(visR, f"R corners: {0 if ciR is None else len(ciR)}  saved: {len(L_cc)}/{args.pairs}")
 
             # 표시
-            cv2.imshow("LEFT", visL)
-            cv2.imshow("RIGHT", visR)
+            # 미리보기 축소 적용
+            dispL, _ = make_display(visL, args.disp_scale, args.disp_max_width)
+            dispR, _ = make_display(visR, args.disp_scale, args.disp_max_width)
+
+            cv2.imshow("LEFT", dispL)
+            cv2.imshow("RIGHT", dispR)
 
             # 키 처리
             k = cv2.waitKey(1) & 0xFF
