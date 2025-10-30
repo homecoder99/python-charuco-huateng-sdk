@@ -70,13 +70,27 @@ def get_aruco_dict(name):
 
 def create_charuco_board(squaresX, squaresY, square_mm, marker_mm, aruco_dict):
     ar = cv2.aruco
-    # OpenCV 4.7+: CharucoBoard.create((cols, rows), square, marker, dict)
-    if hasattr(ar, "CharucoBoard") and hasattr(ar.CharucoBoard, "create"):
-        return ar.CharucoBoard.create((squaresX, squaresY), float(square_mm), float(marker_mm), aruco_dict)
-    # 구버전: CharucoBoard_create(cols, rows, square, marker, dict)
+    # --- OpenCV 버전별 생성자 호환 ---
+    # 순서: (A) 파이썬 생성자 호출 → (B) 정적 create() → (C) _create() 팩토리
+    # A) CharucoBoard((cols, rows), square, marker, dict)
+    if hasattr(ar, "CharucoBoard"):
+        # 일부 4.x 빌드에서는 파이썬 생성자 호출이 가능
+        try:
+            return ar.CharucoBoard((int(squaresX), int(squaresY)), float(square_mm), float(marker_mm), aruco_dict)
+        except Exception:
+            pass
+        # B) CharucoBoard.create(...)
+        try:
+            if hasattr(ar.CharucoBoard, "create"):
+                return ar.CharucoBoard.create(int(squaresX), int(squaresY), float(square_mm), float(marker_mm), aruco_dict)
+        except Exception:
+            pass
+    # C) CharucoBoard_create(...)
     if hasattr(ar, "CharucoBoard_create"):
-        return ar.CharucoBoard_create(squaresX, squaresY, float(square_mm), float(marker_mm), aruco_dict)
-    raise RuntimeError("This OpenCV build lacks CharucoBoard. Install opencv-contrib-python.")
+        return ar.CharucoBoard_create(int(squaresX), int(squaresY), float(square_mm), float(marker_mm), aruco_dict)
+    # 여전히 실패 시: 설치/가림 이슈 가능성
+    raise RuntimeError("This OpenCV build lacks CharucoBoard API (constructor/create). Ensure opencv-contrib-python is installed and no local cv2.* shadows.")
+
 
 
 def create_detector(aruco_dict):
@@ -118,8 +132,25 @@ def refine_markers(gray, board, corners, ids, rejected):
 
 
 def interpolate_charuco(gray, corners, ids, board, cameraMatrix=None, distCoeffs=None):
+    """OpenCV 버전별 반환값 호환 처리
+    - 구버전: (charucoCorners, charucoIds)
+    - 신버전(일부 4.10+): (retval, charucoCorners, charucoIds)
+    입력 마커가 없으면 (None, None) 반환
+    """
     ar = cv2.aruco
-    return ar.interpolateCornersCharuco(corners, ids, gray, board, cameraMatrix, distCoeffs)
+    if ids is None or corners is None or len(corners) == 0:
+        return None, None
+    ret = ar.interpolateCornersCharuco(corners, ids, gray, board, cameraMatrix, distCoeffs)
+    if isinstance(ret, tuple):
+        if len(ret) == 2:
+            c_corners, c_ids = ret
+        elif len(ret) == 3:
+            _, c_corners, c_ids = ret
+        else:
+            c_corners, c_ids = ret[-2], ret[-1]
+    else:
+        c_corners, c_ids = ret, None
+    return c_corners, c_ids
 
 
 def calibrate_charuco_single(all_charuco_corners, all_charuco_ids, board, img_size):
