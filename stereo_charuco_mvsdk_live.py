@@ -17,12 +17,11 @@ Huateng/MindVision MVSDK + OpenCV(aruco) 라이브 캘리브레이션 스크립�
   export PYTHONPATH=$PYTHONPATH:~/MVSDK/python
   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:~/MVSDK/lib/x64
 
-실행 예시: 
-python stereo_charuco_mvsdk_live.py \
-  --pairs 20 \
-  --dict 5X5_1000 --squaresX 10 --squaresY 12 --square 20.0 --marker 14.0 \
-  --min-corners 20 --exposure-us 30000 --out out_live --debug \
-  --trigger cont
+실행 예시:
+  python stereo_charuco_mvsdk_live.py \
+    --pairs 20 \
+    --dict 5X5_1000 --squaresX 10 --squaresY 12 --square 20.0 --marker 14.0 \
+    --min-corners 20 --exposure-us 30000 --out out_live --debug
 
 사용법:
   - 미리 2대 카메라 전원/네트워크 연결 후 스크립트 실행
@@ -43,9 +42,32 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+# Qt Wayland 플러그인 이슈 회피: X11(xcb) 백엔드로 강제
+os.environ.setdefault('QT_QPA_PLATFORM','xcb')
 import cv2
 
 import mvsdk  # Huateng/MindVision Python SDK
+
+# --- CameraInit 재시도 유틸: -37(네트워크 전송오류), -13(서브넷/점유) 등 대응 ---
+def _init_with_retry(dev, retries=4, base_sleep=0.2):
+    last = None
+    for k in range(retries):
+        try:
+            return mvsdk.CameraInit(dev, -1, -1)
+        except mvsdk.CameraException as e:
+            s = f"{e.error_code} {getattr(e, 'message', '')}"
+            # -37: 网络数据发送错误, -13: 이미 점유/서브넷, 기타 네트워크성 실패 재시도
+            if (getattr(e, 'error_code', None) in (-37, -13)) or ("网络" in s) or ("send" in s.lower()):
+                time.sleep(base_sleep * (k + 1))
+                continue
+            last = e
+            break
+        except Exception as e:
+            last = e
+            break
+    if last:
+        raise last
+    raise RuntimeError("Unknown init failure")
 
 # ---------------------- ArUco/ChArUco 호환 헬퍼 ----------------------
 def get_aruco_dict(name):
@@ -237,7 +259,7 @@ class Cam:
     def open(self, exposure_us=30000, soft_trigger=True):
         self._soft = soft_trigger
         # 카메라 초기화
-        self.h = mvsdk.CameraInit(self.dev, -1, -1)
+        self.h = _init_with_retry(self.dev)
         self.name = getattr(self.dev, 'GetFriendlyName', lambda: 'Camera')()
 
         # Capability 읽기 및 모노/컬러 판단
@@ -311,7 +333,13 @@ class Cam:
         for attempt in range(3):
             try:
                 if self._soft:
+                    # 소프트 트리거를 두 번 짧게 보내 파이프라인을 깨움
                     mvsdk.CameraSoftTrigger(self.h)
+                    time.sleep(0.005)
+                    try:
+                        mvsdk.CameraSoftTrigger(self.h)
+                    except Exception:
+                        pass
                 pRaw, FrameHead = mvsdk.CameraGetImageBuffer(self.h, int(timeout_ms))
                 try:
                     mvsdk.CameraImageProcess(self.h, pRaw, self.pFrameBuffer, FrameHead)
@@ -392,6 +420,7 @@ def main():
     camL = Cam(devs[0]); camR = Cam(devs[1])
     try:
         camL.open(exposure_us=args.exposure_us, soft_trigger=(args.trigger=="soft"))
+        time.sleep(0.3)
         camR.open(exposure_us=args.exposure_us, soft_trigger=(args.trigger=="soft"))
     except Exception as e:
         print("[ERR] 카메라 오픈 실패:", e)
@@ -419,7 +448,7 @@ def main():
     try:
         while True:
             # 동시 소프트 트리거 → 프레임 획득
-            frameL, headL = camL.snap_once(timeout_ms=2000)
+            frameL, headL = camL.snap_once(timeout_ms=4000)
             frameR, headR = camR.snap_once(timeout_ms=2000)
 
             if swap_lr:
