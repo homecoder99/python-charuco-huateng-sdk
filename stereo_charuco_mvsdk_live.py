@@ -17,11 +17,12 @@ Huateng/MindVision MVSDK + OpenCV(aruco) 라이브 캘리브레이션 스크립�
   export PYTHONPATH=$PYTHONPATH:~/MVSDK/python
   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:~/MVSDK/lib/x64
 
-실행 예시:
-  python stereo_charuco_mvsdk_live.py \
-    --pairs 20 \
-    --dict 5X5_1000 --squaresX 10 --squaresY 12 --square 20.0 --marker 14.0 \
-    --min-corners 20 --exposure-us 30000 --out out_live --debug
+실행 예시: 
+python stereo_charuco_mvsdk_live.py \
+  --pairs 20 \
+  --dict 5X5_1000 --squaresX 10 --squaresY 12 --square 20.0 --marker 14.0 \
+  --min-corners 20 --exposure-us 30000 --out out_live --debug \
+  --trigger cont
 
 사용법:
   - 미리 2대 카메라 전원/네트워크 연결 후 스크립트 실행
