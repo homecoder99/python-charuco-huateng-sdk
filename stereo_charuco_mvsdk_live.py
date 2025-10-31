@@ -46,37 +46,6 @@ import cv2
 
 import mvsdk  # Huateng/MindVision Python SDK
 
-# 보조: 시리얼 얻기(모델별 속성 차이를 흡수)
-def _get_sn(dev):
-    for attr in ("GetSerialNumber","acSn","strSerialNumber","GetSN"):
-        if hasattr(dev, attr):
-            v = getattr(dev, attr)()
-            try:
-                return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
-            except Exception:
-                return str(v)
-    return ""
-
-# 보조: 안정적으로 초기화(에러 -37, -13 등은 지연 후 재시도)
-def _init_with_retry(dev, retries=4, base_sleep=0.2):
-    last = None
-    for k in range(retries):
-        try:
-            return mvsdk.CameraInit(dev, -1, -1)
-        except mvsdk.CameraException as e:
-            s = str(e)
-            if e.error_code in (-37, -13) or "网络" in s or "send" in s.lower():
-                time.sleep(base_sleep * (k+1))
-                continue
-            last = e
-            break
-        except Exception as e:
-            last = e
-            break
-    if last:
-        raise last
-    raise RuntimeError("Unknown init failure")
-
 # ---------------------- ArUco/ChArUco 호환 헬퍼 ----------------------
 def get_aruco_dict(name):
     ar = cv2.aruco
@@ -403,23 +372,8 @@ def main():
     ap.add_argument("--disp-scale", type=float, default=0.33, help="미리보기 축소 배율(0~1). 1.0=원본")
     ap.add_argument("--disp-max-width", type=int, default=1280, help="미리보기 가로 최대 픽셀. 0=무제한")
     ap.add_argument("--trigger", choices=["soft","cont"], default="cont", help="소프트 트리거(soft) 또는 연속취득(cont)")
-    ap.add_argument("--left-sn",  default="", help="LEFT 카메라 시리얼")
-    ap.add_argument("--right-sn", default="", help="RIGHT 카메라 시리얼")
     args = ap.parse_args()
 
-    # 선택 로직
-    devs = mvsdk.CameraEnumerateDevice()
-    if args.left-sn and args.right-sn:
-        dev_left  = next(d for d in devs if _get_sn(d) == args.left_sn)
-        dev_right = next(d for d in devs if _get_sn(d) == args.right_sn)
-    else:
-        # 모델명 기준(예: COLOR를 left, MONO를 right), 못 찾으면 0/1
-        dev_left  = next((d for d in devs if "C-T1P" in d.GetFriendlyName()), devs[0])
-        dev_right = next((d for d in devs if "M-T1P" in d.GetFriendlyName() and d is not dev_left),
-                        devs[1 if len(devs)>1 else 0])
-    print("LEFT SN:", _get_sn(dev_left),  "|", dev_left.GetFriendlyName())
-    print("RIGHT SN:",_get_sn(dev_right), "|", dev_right.GetFriendlyName())
-    
     outdir = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
     (outdir / "raw").mkdir(parents=True, exist_ok=True)
     if args.debug:
@@ -436,9 +390,8 @@ def main():
 
     camL = Cam(devs[0]); camR = Cam(devs[1])
     try:
-        hL = _init_with_retry(dev_left)
-        time.sleep(0.3)
-        hR = _init_with_retry(dev_right)
+        camL.open(exposure_us=args.exposure_us, soft_trigger=(args.trigger=="soft"))
+        camR.open(exposure_us=args.exposure_us, soft_trigger=(args.trigger=="soft"))
     except Exception as e:
         print("[ERR] 카메라 오픈 실패:", e)
         try:
