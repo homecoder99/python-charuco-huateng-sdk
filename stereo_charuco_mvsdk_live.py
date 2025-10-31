@@ -231,8 +231,10 @@ class Cam:
         self.pFrameBuffer = 0
         self.FrameBufferSize = 0
         self.name = None
+        self._soft = False
 
     def open(self, exposure_us=30000, soft_trigger=True):
+        self._soft = soft_trigger
         # 카메라 초기화
         self.h = mvsdk.CameraInit(self.dev, -1, -1)
         self.name = getattr(self.dev, 'GetFriendlyName', lambda: 'Camera')()
@@ -300,15 +302,40 @@ class Cam:
         return frame.copy()
 
     def snap_once(self, timeout_ms=2000):
-        """소프트 트리거 1회 → 프레임 반환 (numpy)."""
-        mvsdk.CameraSoftTrigger(self.h)
-        pRaw, FrameHead = mvsdk.CameraGetImageBuffer(self.h, int(timeout_ms))
-        try:
-            mvsdk.CameraImageProcess(self.h, pRaw, self.pFrameBuffer, FrameHead)
-        finally:
-            mvsdk.CameraReleaseImageBuffer(self.h, pRaw)
-        frame = self._numpy_from_pbuffer(FrameHead)
-        return frame, FrameHead
+        """프레임 1장 취득.
+        - 소프트트리거 모드면 트리거 후 대기
+        - 타임아웃(-12) 발생 시 소프트트리거 재시도 → 연속모드 폴백
+        """
+        last_exc = None
+        for attempt in range(3):
+            try:
+                if self._soft:
+                    mvsdk.CameraSoftTrigger(self.h)
+                pRaw, FrameHead = mvsdk.CameraGetImageBuffer(self.h, int(timeout_ms))
+                try:
+                    mvsdk.CameraImageProcess(self.h, pRaw, self.pFrameBuffer, FrameHead)
+                finally:
+                    mvsdk.CameraReleaseImageBuffer(self.h, pRaw)
+                frame = self._numpy_from_pbuffer(FrameHead)
+                return frame, FrameHead
+            except Exception as e:
+                s = str(e)
+                last_exc = e
+                # -12 timeout / "超时" / 인코딩 깨짐("瓒呮椂") / 영어 메시지
+                if ("-12" in s) or ("timeout" in s.lower()) or ("超时" in s) or ("瓒呮椂" in s):
+                    if attempt == 0:
+                        time.sleep(0.02)
+                        continue
+                    if attempt == 1 and self._soft:
+                        try:
+                            mvsdk.CameraSetTriggerMode(self.h, 0)  # 연속취득으로 폴백
+                            self._soft = False
+                            time.sleep(0.05)
+                            continue
+                        except Exception:
+                            pass
+                raise
+        raise last_exc
 
 # ---------------------- 라이브 캡처 + 캘리브레이션 ----------------------
 def draw_info(img, text, org=(10,30)):
@@ -344,6 +371,7 @@ def main():
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--disp-scale", type=float, default=0.33, help="미리보기 축소 배율(0~1). 1.0=원본")
     ap.add_argument("--disp-max-width", type=int, default=1280, help="미리보기 가로 최대 픽셀. 0=무제한")
+    ap.add_argument("--trigger", choices=["soft","cont"], default="cont", help="소프트 트리거(soft) 또는 연속취득(cont)")
     args = ap.parse_args()
 
     outdir = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -362,8 +390,8 @@ def main():
 
     camL = Cam(devs[0]); camR = Cam(devs[1])
     try:
-        camL.open(exposure_us=args.exposure_us, soft_trigger=True)
-        camR.open(exposure_us=args.exposure_us, soft_trigger=True)
+        camL.open(exposure_us=args.exposure_us, soft_trigger=(args.trigger=="soft"))
+        camR.open(exposure_us=args.exposure_us, soft_trigger=(args.trigger=="soft"))
     except Exception as e:
         print("[ERR] 카메라 오픈 실패:", e)
         try:
